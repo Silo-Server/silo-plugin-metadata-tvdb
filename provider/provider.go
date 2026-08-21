@@ -487,7 +487,7 @@ func (p *Provider) GetImages(ctx context.Context, req metadata.ImageRequest) ([]
 
 	var out []metadata.RemoteImage
 	for _, a := range artworks {
-		if seasonGallery && a.Width > 0 && a.Height > 0 && a.Height <= a.Width {
+		if seasonGallery && (a.Width <= 0 || a.Height <= a.Width) {
 			continue
 		}
 		imgType := metadata.ImagePoster
@@ -507,7 +507,11 @@ func (p *Provider) GetImages(ctx context.Context, req metadata.ImageRequest) ([]
 			Rating:   float64(a.Score),
 		})
 	}
-	out = preferPrimaryImage(out, metadata.ImagePoster, primaryPosterURL, "")
+	if seasonGallery {
+		out = includePrimaryImage(out, metadata.ImagePoster, primaryPosterURL, "")
+	} else {
+		out = preferPrimaryImage(out, metadata.ImagePoster, primaryPosterURL, "")
+	}
 	if seasonGallery && req.SeasonNumber != nil {
 		for i := range out {
 			out[i].SeasonNumber = req.SeasonNumber
@@ -894,6 +898,36 @@ func preferPrimaryImage(
 		Type:     imageType,
 		Language: language,
 		Rating:   bestRating + 1,
+	})
+}
+
+// includePrimaryImage keeps a provider's reported artwork scores intact. The
+// primary season poster may not appear in the artwork array, so include it with
+// an unknown score rather than manufacturing a score above every alternative.
+func includePrimaryImage(
+	images []metadata.RemoteImage,
+	imageType metadata.ImageType,
+	primaryURL, language string,
+) []metadata.RemoteImage {
+	primaryURL = strings.TrimSpace(primaryURL)
+	if primaryURL == "" {
+		return images
+	}
+
+	for i := range images {
+		if images[i].Type != imageType || images[i].URL != primaryURL {
+			continue
+		}
+		if images[i].Language == "" && language != "" {
+			images[i].Language = language
+		}
+		return images
+	}
+
+	return append(images, metadata.RemoteImage{
+		URL:      primaryURL,
+		Type:     imageType,
+		Language: language,
 	})
 }
 

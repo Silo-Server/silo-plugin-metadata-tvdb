@@ -275,6 +275,7 @@ func TestGetImagesReturnsExactSeasonGallery(t *testing.T) {
 						{"id": 1, "type": 7, "image": "https://artworks.example/specials-one.jpg", "language": "eng", "score": 9, "width": 2000, "height": 3000},
 						{"id": 2, "type": 14, "image": "https://artworks.example/specials-two.jpg", "language": "fra", "score": 8, "width": 2000, "height": 3000},
 						{"id": 3, "type": 3, "image": "https://artworks.example/specials-landscape.jpg", "score": 10, "width": 3840, "height": 2160},
+						{"id": 4, "type": 7, "image": "https://artworks.example/specials-unknown-size.jpg", "score": 10, "width": 0, "height": 0},
 					},
 				},
 			})
@@ -308,6 +309,33 @@ func TestGetImagesReturnsExactSeasonGallery(t *testing.T) {
 		if strings.Contains(image.URL, "show-poster") {
 			t.Fatalf("show poster leaked into exact season gallery: %#v", image)
 		}
+		if strings.Contains(image.URL, "unknown-size") {
+			t.Fatalf("unknown-orientation artwork leaked into season posters: %#v", image)
+		}
+		if image.URL == "https://artworks.example/specials-primary.jpg" && image.Rating != 0 {
+			t.Fatalf("primary fallback rating = %v, want unknown score 0", image.Rating)
+		}
+	}
+}
+
+func TestIncludePrimaryImagePreservesProviderScores(t *testing.T) {
+	t.Parallel()
+
+	images := []metadata.RemoteImage{
+		{URL: "https://artworks.example/primary.jpg", Type: metadata.ImagePoster, Rating: 7},
+		{URL: "https://artworks.example/top-voted.jpg", Type: metadata.ImagePoster, Rating: 9},
+	}
+	got := includePrimaryImage(images, metadata.ImagePoster, "https://artworks.example/primary.jpg", "")
+	if len(got) != 2 {
+		t.Fatalf("images = %#v, want no duplicate primary", got)
+	}
+	if got[0].Rating != 7 || got[1].Rating != 9 {
+		t.Fatalf("ratings = [%v, %v], want provider scores [7, 9]", got[0].Rating, got[1].Rating)
+	}
+
+	got = includePrimaryImage(got, metadata.ImagePoster, "https://artworks.example/missing-primary.jpg", "")
+	if len(got) != 3 || got[2].Rating != 0 {
+		t.Fatalf("missing primary = %#v, want appended poster with unknown score 0", got)
 	}
 }
 
