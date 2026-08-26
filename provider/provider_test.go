@@ -161,6 +161,28 @@ func TestFillRemoteIDsUsesTypeAndSourceNameWithoutOverwrite(t *testing.T) {
 	}
 }
 
+// artworkFixture builds a TVDB artwork JSON object for image test responses.
+// A nil includesText leaves the key out entirely, matching a provider that
+// does not report text presence; extra merges in optional keys such as
+// "thumbnail" or "language".
+func artworkFixture(id, artType int, url string, width, height, score int, includesText any, extra map[string]any) map[string]any {
+	artwork := map[string]any{
+		"id":     id,
+		"type":   artType,
+		"image":  url,
+		"width":  width,
+		"height": height,
+		"score":  score,
+	}
+	if includesText != nil {
+		artwork["includesText"] = includesText
+	}
+	for key, value := range extra {
+		artwork[key] = value
+	}
+	return artwork
+}
+
 func TestGetImagesReturnsArtworkImageURLs(t *testing.T) {
 	t.Parallel()
 
@@ -182,24 +204,13 @@ func TestGetImagesReturnsArtworkImageURLs(t *testing.T) {
 					"id":   99,
 					"name": "Series",
 					"artworks": []map[string]any{
-						{
-							"id":        1,
-							"type":      2,
-							"image":     "https://artworks.example/poster-original.jpg",
+						artworkFixture(1, 2, "https://artworks.example/poster-original.jpg", 2000, 3000, 10, true, map[string]any{
 							"thumbnail": "https://artworks.example/poster-thumb.jpg",
-							"width":     2000,
-							"height":    3000,
-							"score":     10,
-						},
-						{
-							"id":        2,
-							"type":      3,
-							"image":     "https://artworks.example/background-original.jpg",
+						}),
+						artworkFixture(2, 3, "https://artworks.example/background-original.jpg", 3840, 2160, 8, false, map[string]any{
 							"thumbnail": "",
-							"width":     3840,
-							"height":    2160,
-							"score":     8,
-						},
+						}),
+						artworkFixture(3, 22, "https://artworks.example/logo-original.png", 1000, 400, 7, nil, nil),
 					},
 				},
 			})
@@ -220,20 +231,32 @@ func TestGetImagesReturnsArtworkImageURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetImages() error = %v", err)
 	}
-	if len(images) != 2 {
-		t.Fatalf("len(images) = %d, want 2", len(images))
+	if len(images) != 3 {
+		t.Fatalf("len(images) = %d, want 3", len(images))
 	}
 
-	got := map[metadata.ImageType]string{}
+	got := map[metadata.ImageType]metadata.RemoteImage{}
 	for _, img := range images {
-		got[img.Type] = img.URL
+		got[img.Type] = img
 	}
 
-	if got[metadata.ImagePoster] != "https://artworks.example/poster-original.jpg" {
-		t.Fatalf("poster URL = %q", got[metadata.ImagePoster])
+	if got[metadata.ImagePoster].URL != "https://artworks.example/poster-original.jpg" {
+		t.Fatalf("poster URL = %q", got[metadata.ImagePoster].URL)
 	}
-	if got[metadata.ImageBackdrop] != "https://artworks.example/background-original.jpg" {
-		t.Fatalf("backdrop URL = %q", got[metadata.ImageBackdrop])
+	if got[metadata.ImagePoster].IncludesText == nil || !*got[metadata.ImagePoster].IncludesText {
+		t.Fatalf("poster IncludesText = %v, want true", got[metadata.ImagePoster].IncludesText)
+	}
+	if got[metadata.ImageBackdrop].URL != "https://artworks.example/background-original.jpg" {
+		t.Fatalf("backdrop URL = %q", got[metadata.ImageBackdrop].URL)
+	}
+	if got[metadata.ImageBackdrop].IncludesText == nil || *got[metadata.ImageBackdrop].IncludesText {
+		t.Fatalf("backdrop IncludesText = %v, want false", got[metadata.ImageBackdrop].IncludesText)
+	}
+	if got[metadata.ImageLogo].URL != "https://artworks.example/logo-original.png" {
+		t.Fatalf("logo URL = %q", got[metadata.ImageLogo].URL)
+	}
+	if got[metadata.ImageLogo].IncludesText != nil {
+		t.Fatalf("logo IncludesText = %v, want nil for an omitted provider value", got[metadata.ImageLogo].IncludesText)
 	}
 }
 
@@ -259,24 +282,12 @@ func TestGetImagesPrefersTVDBPrimaryPoster(t *testing.T) {
 					"name":  "Series",
 					"image": "https://artworks.example/poster-primary.jpg",
 					"artworks": []map[string]any{
-						{
-							"id":       1,
-							"type":     2,
-							"image":    "https://artworks.example/poster-primary.jpg",
+						artworkFixture(1, 2, "https://artworks.example/poster-primary.jpg", 2000, 3000, 10, true, map[string]any{
 							"language": "eng",
-							"width":    2000,
-							"height":   3000,
-							"score":    10,
-						},
-						{
-							"id":       2,
-							"type":     2,
-							"image":    "https://artworks.example/poster-textless.jpg",
+						}),
+						artworkFixture(2, 2, "https://artworks.example/poster-textless.jpg", 2000, 3000, 11, false, map[string]any{
 							"language": "",
-							"width":    2000,
-							"height":   3000,
-							"score":    11,
-						},
+						}),
 					},
 				},
 			})
@@ -317,6 +328,12 @@ func TestGetImagesPrefersTVDBPrimaryPoster(t *testing.T) {
 	if primary.Language != "en" {
 		t.Fatalf("primary language = %q, want en", primary.Language)
 	}
+	if primary.IncludesText == nil || !*primary.IncludesText {
+		t.Fatalf("primary IncludesText = %v, want true", primary.IncludesText)
+	}
+	if textless.IncludesText == nil || *textless.IncludesText {
+		t.Fatalf("textless IncludesText = %v, want false", textless.IncludesText)
+	}
 	if primary.Rating <= textless.Rating {
 		t.Fatalf("primary rating = %v, textless rating = %v; want primary > textless", primary.Rating, textless.Rating)
 	}
@@ -344,15 +361,9 @@ func TestGetImagesAddsPrimaryPosterWhenArtworkListMissesIt(t *testing.T) {
 					"name":  "Series",
 					"image": "https://artworks.example/poster-primary.jpg",
 					"artworks": []map[string]any{
-						{
-							"id":       2,
-							"type":     2,
-							"image":    "https://artworks.example/poster-alt.jpg",
+						artworkFixture(2, 2, "https://artworks.example/poster-alt.jpg", 2000, 3000, 11, nil, map[string]any{
 							"language": "",
-							"width":    2000,
-							"height":   3000,
-							"score":    11,
-						},
+						}),
 					},
 				},
 			})
