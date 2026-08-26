@@ -161,6 +161,28 @@ func TestFillRemoteIDsUsesTypeAndSourceNameWithoutOverwrite(t *testing.T) {
 	}
 }
 
+// artworkFixture builds a TVDB artwork JSON object for image test responses.
+// A nil includesText leaves the key out entirely, matching a provider that
+// does not report text presence; extra merges in optional keys such as
+// "thumbnail" or "language".
+func artworkFixture(id, artType int, url string, width, height, score int, includesText any, extra map[string]any) map[string]any {
+	artwork := map[string]any{
+		"id":     id,
+		"type":   artType,
+		"image":  url,
+		"width":  width,
+		"height": height,
+		"score":  score,
+	}
+	if includesText != nil {
+		artwork["includesText"] = includesText
+	}
+	for key, value := range extra {
+		artwork[key] = value
+	}
+	return artwork
+}
+
 func TestGetImagesReturnsArtworkImageURLs(t *testing.T) {
 	t.Parallel()
 
@@ -182,34 +204,13 @@ func TestGetImagesReturnsArtworkImageURLs(t *testing.T) {
 					"id":   99,
 					"name": "Series",
 					"artworks": []map[string]any{
-						{
-							"id":           1,
-							"type":         2,
-							"image":        "https://artworks.example/poster-original.jpg",
-							"thumbnail":    "https://artworks.example/poster-thumb.jpg",
-							"width":        2000,
-							"height":       3000,
-							"score":        10,
-							"includesText": true,
-						},
-						{
-							"id":           2,
-							"type":         3,
-							"image":        "https://artworks.example/background-original.jpg",
-							"thumbnail":    "",
-							"width":        3840,
-							"height":       2160,
-							"score":        8,
-							"includesText": false,
-						},
-						{
-							"id":     3,
-							"type":   22,
-							"image":  "https://artworks.example/logo-original.png",
-							"width":  1000,
-							"height": 400,
-							"score":  7,
-						},
+						artworkFixture(1, 2, "https://artworks.example/poster-original.jpg", 2000, 3000, 10, true, map[string]any{
+							"thumbnail": "https://artworks.example/poster-thumb.jpg",
+						}),
+						artworkFixture(2, 3, "https://artworks.example/background-original.jpg", 3840, 2160, 8, false, map[string]any{
+							"thumbnail": "",
+						}),
+						artworkFixture(3, 22, "https://artworks.example/logo-original.png", 1000, 400, 7, nil, nil),
 					},
 				},
 			})
@@ -281,26 +282,12 @@ func TestGetImagesPrefersTVDBPrimaryPoster(t *testing.T) {
 					"name":  "Series",
 					"image": "https://artworks.example/poster-primary.jpg",
 					"artworks": []map[string]any{
-						{
-							"id":           1,
-							"type":         2,
-							"image":        "https://artworks.example/poster-primary.jpg",
-							"language":     "eng",
-							"width":        2000,
-							"height":       3000,
-							"score":        10,
-							"includesText": true,
-						},
-						{
-							"id":           2,
-							"type":         2,
-							"image":        "https://artworks.example/poster-textless.jpg",
-							"language":     "",
-							"width":        2000,
-							"height":       3000,
-							"score":        11,
-							"includesText": false,
-						},
+						artworkFixture(1, 2, "https://artworks.example/poster-primary.jpg", 2000, 3000, 10, true, map[string]any{
+							"language": "eng",
+						}),
+						artworkFixture(2, 2, "https://artworks.example/poster-textless.jpg", 2000, 3000, 11, false, map[string]any{
+							"language": "",
+						}),
 					},
 				},
 			})
@@ -374,15 +361,9 @@ func TestGetImagesAddsPrimaryPosterWhenArtworkListMissesIt(t *testing.T) {
 					"name":  "Series",
 					"image": "https://artworks.example/poster-primary.jpg",
 					"artworks": []map[string]any{
-						{
-							"id":       2,
-							"type":     2,
-							"image":    "https://artworks.example/poster-alt.jpg",
+						artworkFixture(2, 2, "https://artworks.example/poster-alt.jpg", 2000, 3000, 11, nil, map[string]any{
 							"language": "",
-							"width":    2000,
-							"height":   3000,
-							"score":    11,
-						},
+						}),
 					},
 				},
 			})

@@ -270,11 +270,7 @@ func imageRecordMetadata(img metadata.RemoteImage) *structpb.Struct {
 	if img.IncludesText != nil {
 		fields["includes_text"] = *img.IncludesText
 	}
-	if len(fields) == 0 {
-		return nil
-	}
-	result, _ := structpb.NewStruct(fields)
-	return result
+	return structFromMap(fields)
 }
 
 func (s *metadataServer) ResolveImageURL(_ context.Context, req *pluginv1.ResolveImageURLRequest) (*pluginv1.ResolveImageURLResponse, error) {
