@@ -25,4 +25,6 @@ require (
 	google.golang.org/grpc v1.82.1 // indirect
 )
 
-replace github.com/Silo-Server/silo-plugin-sdk => github.com/blurbery/silo-plugin-sdk v0.0.0-20260821084713-0029dbbc36be
+// TEMPORARY: pins the SeasonNumber SDK contract from Silo-Server/silo-plugin-sdk#16.
+// Must be replaced by an official tagged SDK release before this plugin PR merges.
+replace github.com/Silo-Server/silo-plugin-sdk => github.com/blurbery/silo-plugin-sdk v0.13.3-0.20260821093713-0950ea324999
