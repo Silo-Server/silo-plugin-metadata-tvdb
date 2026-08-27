@@ -476,12 +476,13 @@ func (p *Provider) GetImages(ctx context.Context, req metadata.ImageRequest) ([]
 			continue
 		}
 		out = append(out, metadata.RemoteImage{
-			URL:      a.Image,
-			Type:     imgType,
-			Language: toLang1(a.Language),
-			Width:    a.Width,
-			Height:   a.Height,
-			Rating:   float64(a.Score),
+			URL:          a.Image,
+			Type:         imgType,
+			Language:     toLang1(a.Language),
+			Width:        a.Width,
+			Height:       a.Height,
+			Rating:       float64(a.Score),
+			IncludesText: a.IncludesText,
 		})
 	}
 	return ensurePrimaryImage(out, metadata.ImagePoster, primaryPosterURL, "", true), nil
@@ -528,12 +529,13 @@ func (p *Provider) seasonGalleryImages(ctx context.Context, seriesID, seasonNumb
 			primaryAccepted = true
 		}
 		images = append(images, metadata.RemoteImage{
-			URL:      artwork.Image,
-			Type:     metadata.ImagePoster,
-			Language: toLang1(artwork.Language),
-			Width:    artwork.Width,
-			Height:   artwork.Height,
-			Rating:   float64(artwork.Score),
+			URL:          artwork.Image,
+			Type:         metadata.ImagePoster,
+			Language:     toLang1(artwork.Language),
+			Width:        artwork.Width,
+			Height:       artwork.Height,
+			Rating:       float64(artwork.Score),
+			IncludesText: artwork.IncludesText,
 		})
 	}
 
