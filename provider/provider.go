@@ -13,9 +13,12 @@ import (
 	"github.com/Silo-Server/silo-plugin-tvdb/models"
 )
 
-const maxCast = 20
+const (
+	maxCast              = 20
+	officialSeasonTypeID = 1
+)
 
-// officialSeasonType is TVDB's "Aired Order" season-type slug (Type.ID == 1),
+// officialSeasonType is TVDB's "Aired Order" season-type slug,
 // used by the bulk episodes endpoint to mirror the prior season filter.
 const officialSeasonType = "official"
 
@@ -358,7 +361,7 @@ func (p *Provider) getSeriesMetadata(ctx context.Context, id int, lang string) (
 
 	officialCount := 0
 	for _, s := range series.Seasons {
-		if s.Type.ID == 1 && s.Number > 0 {
+		if isOfficialSeason(s) && s.Number > 0 {
 			officialCount++
 		}
 	}
@@ -455,6 +458,9 @@ func (p *Provider) GetImages(ctx context.Context, req metadata.ImageRequest) ([]
 		artworks = movie.Artworks
 		primaryPosterURL = movie.Image
 	case "series":
+		if req.SeasonNumber != nil {
+			return p.seasonGalleryImages(ctx, id, *req.SeasonNumber)
+		}
 		series, err := p.client.GetSeriesExtended(ctx, id)
 		if err != nil {
 			return nil, err
@@ -479,7 +485,67 @@ func (p *Provider) GetImages(ctx context.Context, req metadata.ImageRequest) ([]
 			IncludesText: a.IncludesText,
 		})
 	}
-	return preferPrimaryImage(out, metadata.ImagePoster, primaryPosterURL, ""), nil
+	return ensurePrimaryImage(out, metadata.ImagePoster, primaryPosterURL, "", true), nil
+}
+
+func (p *Provider) seasonGalleryImages(ctx context.Context, seriesID, seasonNumber int) ([]metadata.RemoteImage, error) {
+	series, err := p.client.GetSeriesExtended(ctx, seriesID)
+	if err != nil {
+		return nil, err
+	}
+
+	seasonID := 0
+	for _, season := range series.Seasons {
+		if isOfficialSeason(season) && season.Number == seasonNumber &&
+			(seasonID == 0 || season.ID < seasonID) {
+			seasonID = season.ID
+		}
+	}
+	if seasonID == 0 {
+		return nil, nil
+	}
+
+	season, err := p.client.GetSeasonExtended(ctx, seasonID)
+	if err != nil {
+		return nil, err
+	}
+
+	primaryURL := strings.TrimSpace(season.Image)
+	primaryInArtwork := false
+	primaryAccepted := false
+	var images []metadata.RemoteImage
+	for _, artwork := range season.Artwork {
+		isPrimary := primaryURL != "" && artwork.Image == primaryURL
+		if isPrimary {
+			primaryInArtwork = true
+		}
+		if artwork.Type != seasonPosterArtworkTypeID {
+			continue
+		}
+		if artwork.Width > 0 && artwork.Height > 0 && artwork.Height <= artwork.Width {
+			continue
+		}
+		if isPrimary {
+			primaryAccepted = true
+		}
+		images = append(images, metadata.RemoteImage{
+			URL:          artwork.Image,
+			Type:         metadata.ImagePoster,
+			Language:     toLang1(artwork.Language),
+			Width:        artwork.Width,
+			Height:       artwork.Height,
+			Rating:       float64(artwork.Score),
+			IncludesText: artwork.IncludesText,
+		})
+	}
+
+	if !primaryInArtwork || primaryAccepted {
+		images = ensurePrimaryImage(images, metadata.ImagePoster, primaryURL, "", false)
+	}
+	for i := range images {
+		images[i].SeasonNumber = &seasonNumber
+	}
+	return images, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -504,7 +570,7 @@ func (p *Provider) GetSeasons(ctx context.Context, req metadata.SeasonsRequest) 
 	// Filter to official seasons.
 	var officialSeasons []SeasonBaseRecord
 	for _, s := range series.Seasons {
-		if s.Type.ID == 1 {
+		if isOfficialSeason(s) {
 			officialSeasons = append(officialSeasons, s)
 		}
 	}
@@ -810,6 +876,8 @@ func (p *Provider) findPersonByRemoteID(ctx context.Context, remoteID string) (i
 	return 0, nil
 }
 
+const seasonPosterArtworkTypeID = 7
+
 func artworkTypeToImageType(artType int) (metadata.ImageType, bool) {
 	switch artType {
 	case 2:
@@ -823,10 +891,18 @@ func artworkTypeToImageType(artType int) (metadata.ImageType, bool) {
 	}
 }
 
-func preferPrimaryImage(
+func isOfficialSeason(season SeasonBaseRecord) bool {
+	return season.Type.ID == officialSeasonTypeID
+}
+
+// ensurePrimaryImage can either boost a canonical primary above all provider
+// scores or keep the provider's reported artwork scores intact. Season posters
+// use the latter because a missing primary has an unknown score.
+func ensurePrimaryImage(
 	images []metadata.RemoteImage,
 	imageType metadata.ImageType,
 	primaryURL, language string,
+	boostRating bool,
 ) []metadata.RemoteImage {
 	primaryURL = strings.TrimSpace(primaryURL)
 	if primaryURL == "" {
@@ -843,24 +919,31 @@ func preferPrimaryImage(
 			bestRating = img.Rating
 		}
 		if img.URL == primaryURL {
-			primaryIdx = i
+			if primaryIdx == -1 || boostRating {
+				primaryIdx = i
+			}
 		}
 	}
 
 	if primaryIdx >= 0 {
-		images[primaryIdx].Rating = bestRating + 1
+		if boostRating {
+			images[primaryIdx].Rating = bestRating + 1
+		}
 		if images[primaryIdx].Language == "" && language != "" {
 			images[primaryIdx].Language = language
 		}
 		return images
 	}
 
-	return append(images, metadata.RemoteImage{
+	primary := metadata.RemoteImage{
 		URL:      primaryURL,
 		Type:     imageType,
 		Language: language,
-		Rating:   bestRating + 1,
-	})
+	}
+	if boostRating {
+		primary.Rating = bestRating + 1
+	}
+	return append(images, primary)
 }
 
 func findBiography(biographies []Biography, requestedLanguage string) string {

@@ -3,7 +3,7 @@ module github.com/Silo-Server/silo-plugin-tvdb
 go 1.26.3
 
 require (
-	github.com/Silo-Server/silo-plugin-sdk v0.12.0
+	github.com/Silo-Server/silo-plugin-sdk v0.13.2
 	golang.org/x/sync v0.20.0
 	golang.org/x/time v0.14.0
 	google.golang.org/protobuf v1.36.11
@@ -24,3 +24,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/grpc v1.82.1 // indirect
 )
+
+// TEMPORARY: pins the SeasonNumber SDK contract from Silo-Server/silo-plugin-sdk#16.
+// Must be replaced by an official tagged SDK release before this plugin PR merges.
+replace github.com/Silo-Server/silo-plugin-sdk => github.com/blurbery/silo-plugin-sdk v0.13.3-0.20260821093713-0950ea324999

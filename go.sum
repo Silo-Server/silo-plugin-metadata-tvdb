@@ -1,5 +1,5 @@
-github.com/Silo-Server/silo-plugin-sdk v0.12.0 h1:7MnaSIJBVdRE8FhfLXWx7Pe+Q2apJiaPMotfhb1VHoE=
-github.com/Silo-Server/silo-plugin-sdk v0.12.0/go.mod h1:etqmxLTwjxpFH9goAjBDfNDoqHMv2/sqUXu8yx3hNfA=
+github.com/blurbery/silo-plugin-sdk v0.13.3-0.20260821093713-0950ea324999 h1:bueVHYy3gC4S0sKsxJlURLG6GGqmFywGum6o7G0vWCA=
+github.com/blurbery/silo-plugin-sdk v0.13.3-0.20260821093713-0950ea324999/go.mod h1:/domJOMLx2jgSTD9cBEFWtGdWq/AAUEOWxkQLz1gJLE=
 github.com/bufbuild/protocompile v0.14.1 h1:iA73zAf/fyljNjQKwYzUHD6AD4R8KMasmwa/FBatYVw=
 github.com/bufbuild/protocompile v0.14.1/go.mod h1:ppVdAIhbr2H8asPk6k4pY7t9zB1OU5DoEw9xY/FUi1c=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
