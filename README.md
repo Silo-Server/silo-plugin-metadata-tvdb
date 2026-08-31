@@ -27,7 +27,8 @@ go build .
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Matching,
-mapping, or capability changes should start as an issue.
+metadata mapping, image resolution, configuration, or advertised capability
+changes should start as an issue.
 
 ## Attribution
 
