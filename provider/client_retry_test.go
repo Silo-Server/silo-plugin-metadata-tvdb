@@ -180,3 +180,31 @@ func TestRetryAfterDelay(t *testing.T) {
 		}
 	}
 }
+
+// Without a caller deadline, backpressure waits stop at the client's budget
+// instead of retrying for as long as the proxy keeps answering 503.
+func TestProxyModeBackpressureBudgetWithoutDeadline(t *testing.T) {
+	t.Parallel()
+	statuses := make([]int, 50)
+	for i := range statuses {
+		statuses[i] = http.StatusServiceUnavailable
+	}
+	server, gets := newBackpressureServer(t, "1", statuses...)
+	c := NewClient(1000)
+	if err := c.SetProxyURL(server.URL); err != nil {
+		t.Fatal(err)
+	}
+	c.proxyBackpressureBudget = 2500 * time.Millisecond
+
+	start := time.Now()
+	var out apiResponse[SeriesExtendedRecord]
+	if err := c.doGet(context.Background(), "/series/81189/extended", &out); err == nil {
+		t.Fatal("doGet succeeded, want an error once the backpressure budget is spent")
+	}
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("gave up after %v, want within the 2.5s budget", elapsed)
+	}
+	if got := gets.Load(); got < 2 || got > 3 {
+		t.Fatalf("GET attempts = %d, want 2 or 3 within the budget", got)
+	}
+}

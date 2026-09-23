@@ -53,6 +53,9 @@ const (
 	// maxProxyRetryAfter caps a single Retry-After wait so that a malformed or
 	// absurd header cannot park a request indefinitely.
 	maxProxyRetryAfter = time.Hour
+	// defaultProxyBackpressureBudget caps the total time one request spends
+	// waiting on proxy backpressure, including when the caller set no deadline.
+	defaultProxyBackpressureBudget = 10 * time.Minute
 )
 
 // Client is an HTTP client for the TVDB v4 API.
@@ -66,6 +69,9 @@ type Client struct {
 	tokenMu     sync.RWMutex // protects token read/write
 	refreshMu   sync.Mutex   // serialises re-auth attempts
 	limiter     *rate.Limiter
+	// proxyBackpressureBudget is the most one request waits on proxy
+	// Retry-After responses in total.
+	proxyBackpressureBudget time.Duration
 
 	episodesCacheMu sync.Mutex
 	episodesCache   map[string]episodesCacheEntry
@@ -98,12 +104,13 @@ func NewClient(rateLimit int) *Client {
 		rateLimit = 50
 	}
 	return &Client{
-		httpClient:          &http.Client{Timeout: 30 * time.Second},
-		apiKey:              defaultAPIKey,
-		baseURL:             defaultBaseURL,
-		limiter:             rate.NewLimiter(rate.Limit(rateLimit), rateLimit),
-		episodesCache:       make(map[string]episodesCacheEntry),
-		seriesExtendedCache: make(map[int]seriesExtendedCacheEntry),
+		httpClient:              &http.Client{Timeout: 30 * time.Second},
+		apiKey:                  defaultAPIKey,
+		baseURL:                 defaultBaseURL,
+		limiter:                 rate.NewLimiter(rate.Limit(rateLimit), rateLimit),
+		proxyBackpressureBudget: defaultProxyBackpressureBudget,
+		episodesCache:           make(map[string]episodesCacheEntry),
+		seriesExtendedCache:     make(map[int]seriesExtendedCacheEntry),
 	}
 }
 
@@ -262,15 +269,19 @@ func (c *Client) getToken() string {
 // doGet executes a GET request against the TVDB API with rate limiting,
 // Bearer token auth, automatic 401 refresh, and JSON decoding into dest.
 func (c *Client) doGet(ctx context.Context, path string, dest any) error {
-	if err := c.ensureToken(ctx); err != nil {
-		return err
-	}
-
-	baseURL, proxyMode := c.transport()
-	reqURL := baseURL + path
 	authRetries := 0
+	var backpressure time.Duration
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Read the transport and its token afresh on every attempt: switching
+		// proxy settings clears the token, and a retry must go to the upstream
+		// that the next login authenticates against.
+		if err := c.ensureToken(ctx); err != nil {
+			return err
+		}
+		baseURL, proxyMode := c.transport()
+		reqURL := baseURL + path
+
 		// Every HTTP attempt, retries included, goes through the rate limiter.
 		if err := c.limiter.Wait(ctx); err != nil {
 			return err
@@ -316,6 +327,10 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 				if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
 					return fmt.Errorf("tvdb: metadata proxy HTTP %d and Retry-After %s would exceed caller deadline", resp.StatusCode, delay)
 				}
+				if backpressure+wait > c.proxyBackpressureBudget {
+					return fmt.Errorf("tvdb: metadata proxy HTTP %d still busy after waiting %s", resp.StatusCode, backpressure.Round(time.Second))
+				}
+				backpressure += wait
 				slog.Debug("tvdb: metadata proxy busy, waiting for Retry-After",
 					"path", path,
 					"status", resp.StatusCode,

@@ -222,3 +222,49 @@ func TestSetProxyURLIsSafeDuringRequests(t *testing.T) {
 		}
 	}
 }
+
+// Saving proxy settings while a request is in flight clears the token. The
+// retry must log in to and call the new upstream, not keep calling the old one.
+func TestTransportSwitchDuringRequestRetriesAgainstNewUpstream(t *testing.T) {
+	t.Parallel()
+	c := NewClient(1000)
+	var newHits atomic.Int32
+	next := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == proxyPathPrefix+"/login" {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"token":"next-token"}}`))
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer next-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		newHits.Add(1)
+		_, _ = w.Write([]byte(`{"status":"success","data":{"id":81189,"name":"Breaking Bad"}}`))
+	}))
+	t.Cleanup(next.Close)
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"token":"old-token"}}`))
+			return
+		}
+		// The operator saves new proxy settings while this request is in flight.
+		if err := c.SetProxyURL(next.URL); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(old.Close)
+	if err := c.SetProxyURL(old.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	var out apiResponse[SeriesExtendedRecord]
+	if err := c.doGet(context.Background(), "/series/81189/extended", &out); err != nil {
+		t.Fatalf("doGet: %v", err)
+	}
+	if out.Data.ID != 81189 || newHits.Load() != 1 {
+		t.Fatalf("decoded id %d with %d hits on the new upstream, want 81189 and 1", out.Data.ID, newHits.Load())
+	}
+}
