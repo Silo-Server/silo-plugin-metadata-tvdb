@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,15 +42,20 @@ const (
 	seriesExtendedCacheMaxEntries = 512
 )
 
+// proxyPathPrefix is where the Silo metadata proxy mounts the TVDB v4 surface.
+const proxyPathPrefix = "/v1/tvdb/4"
+
 // Client is an HTTP client for the TVDB v4 API.
 type Client struct {
-	httpClient *http.Client
-	apiKey     string
-	baseURL    string
-	token      string       // Bearer token from /login
-	tokenMu    sync.RWMutex // protects token read/write
-	refreshMu  sync.Mutex   // serialises re-auth attempts
-	limiter    *rate.Limiter
+	httpClient  *http.Client
+	apiKey      string
+	baseURL     string
+	proxyMode   bool         // when true, baseURL is a Silo metadata proxy
+	transportMu sync.RWMutex // protects baseURL and proxyMode
+	token       string       // Bearer token from /login
+	tokenMu     sync.RWMutex // protects token read/write
+	refreshMu   sync.Mutex   // serialises re-auth attempts
+	limiter     *rate.Limiter
 
 	episodesCacheMu sync.Mutex
 	episodesCache   map[string]episodesCacheEntry
@@ -93,7 +99,68 @@ func NewClient(rateLimit int) *Client {
 
 // SetBaseURL overrides the API base URL. Used for testing.
 func (c *Client) SetBaseURL(url string) {
-	c.baseURL = url
+	c.setTransport(url, false)
+}
+
+// SetProxyURL routes every request through a Silo metadata proxy at the given
+// base URL (for example https://metadata.siloserver.org). The proxy answers
+// /login itself and serves TVDB's own JSON, so the login flow and response
+// handling are unchanged. An empty URL restores direct TVDB access. Safe to
+// call while requests are in flight.
+func (c *Client) SetProxyURL(proxyURL string) error {
+	proxyURL = strings.TrimRight(strings.TrimSpace(proxyURL), "/")
+	if proxyURL == "" {
+		c.setTransport(defaultBaseURL, false)
+		return nil
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("tvdb: invalid metadata proxy URL %q", proxyURL)
+	}
+	c.setTransport(proxyURL+proxyPathPrefix, true)
+	return nil
+}
+
+// ProxyMode reports whether requests are routed through a Silo metadata proxy.
+func (c *Client) ProxyMode() bool {
+	c.transportMu.RLock()
+	defer c.transportMu.RUnlock()
+	return c.proxyMode
+}
+
+// transport returns the current base URL and whether it is a metadata proxy.
+func (c *Client) transport() (string, bool) {
+	c.transportMu.RLock()
+	defer c.transportMu.RUnlock()
+	return c.baseURL, c.proxyMode
+}
+
+// setTransport switches the upstream the client talks to. When the upstream
+// changes, the bearer token and the in-memory memo caches are dropped so that
+// nothing issued by, or fetched from, the previous upstream is reused. A
+// request already in flight may still store its result afterwards; that is
+// harmless because both upstreams serve the same TVDB data, and a stale token
+// is replaced by the normal 401 refresh.
+func (c *Client) setTransport(baseURL string, proxyMode bool) {
+	c.transportMu.Lock()
+	defer c.transportMu.Unlock()
+	if c.baseURL == baseURL && c.proxyMode == proxyMode {
+		return
+	}
+	c.baseURL = baseURL
+	c.proxyMode = proxyMode
+
+	c.tokenMu.Lock()
+	c.token = ""
+	c.tokenMu.Unlock()
+
+	c.episodesCacheMu.Lock()
+	clear(c.episodesCache)
+	c.episodesCacheMu.Unlock()
+
+	c.seriesExtendedCacheMu.Lock()
+	clear(c.seriesExtendedCache)
+	c.seriesExtendedCacheMu.Unlock()
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +173,8 @@ func (c *Client) authenticate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("tvdb: marshal login body: %w", err)
 	}
-	reqURL := c.baseURL + "/login"
+	baseURL, _ := c.transport()
+	reqURL := baseURL + "/login"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
@@ -192,7 +260,8 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 		return err
 	}
 
-	reqURL := c.baseURL + path
+	baseURL, _ := c.transport()
+	reqURL := baseURL + path
 	authRetries := 0
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {

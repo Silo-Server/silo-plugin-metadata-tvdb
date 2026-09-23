@@ -7,8 +7,16 @@ backed by TheTVDB. It provides series, season, and episode metadata and resolves
 ## Setup
 
 TVDB Metadata is installed as a default Silo plugin. Add or enable **TVDB** in a
-television library's metadata provider chain; no plugin-specific configuration
-is required.
+television library's metadata provider chain. No configuration is required for
+direct TVDB access.
+
+### Silo metadata proxy
+
+The plugin's **Configure** tab has a *Silo Metadata Proxy* section. Turning it on
+routes every TVDB request through the shared proxy at
+`https://metadata.siloserver.org` (or a self-hosted proxy URL you supply). The
+proxy caches responses for all Silo installations, so scans reach TVDB far less
+often. Saving the setting reloads the plugin; no server restart is needed.
 
 ## Dependency Model
 

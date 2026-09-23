@@ -38,6 +38,12 @@ func NewProviderWithClient(c *Client) *Provider {
 	return &Provider{client: c}
 }
 
+// SetMetadataProxyURL routes provider requests through a Silo metadata proxy,
+// or restores direct TVDB access when the URL is empty.
+func (p *Provider) SetMetadataProxyURL(proxyURL string) error {
+	return p.client.SetProxyURL(proxyURL)
+}
+
 func (p *Provider) Slug() string       { return "tvdb" }
 func (p *Provider) Name() string       { return "TheTVDB" }
 func (p *Provider) ForTypes() []string { return []string{"movie", "series"} }
