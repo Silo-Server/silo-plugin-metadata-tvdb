@@ -16,7 +16,9 @@ The plugin's **Configure** tab has a *Silo Metadata Proxy* section. Turning it o
 routes every TVDB request through the shared proxy at
 `https://metadata.siloserver.org` (or a self-hosted proxy URL you supply). The
 proxy caches responses for all Silo installations, so scans reach TVDB far less
-often. Saving the setting reloads the plugin; no server restart is needed.
+often. When the proxy is busy, the plugin waits as long as its `Retry-After`
+header asks, up to the request's deadline. Saving the setting reloads the
+plugin; no server restart is needed.
 
 ## Dependency Model
 

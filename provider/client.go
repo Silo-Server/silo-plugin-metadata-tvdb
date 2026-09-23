@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -44,6 +45,15 @@ const (
 
 // proxyPathPrefix is where the Silo metadata proxy mounts the TVDB v4 surface.
 const proxyPathPrefix = "/v1/tvdb/4"
+
+const (
+	// proxyRetryJitter caps the random delay added after a proxy's Retry-After
+	// so that clients told to wait the same time do not all retry at once.
+	proxyRetryJitter = 250 * time.Millisecond
+	// maxProxyRetryAfter caps a single Retry-After wait so that a malformed or
+	// absurd header cannot park a request indefinitely.
+	maxProxyRetryAfter = time.Hour
+)
 
 // Client is an HTTP client for the TVDB v4 API.
 type Client struct {
@@ -256,15 +266,16 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 		return err
 	}
 
-	if err := c.limiter.Wait(ctx); err != nil {
-		return err
-	}
-
-	baseURL, _ := c.transport()
+	baseURL, proxyMode := c.transport()
 	reqURL := baseURL + path
 	authRetries := 0
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Every HTTP attempt, retries included, goes through the rate limiter.
+		if err := c.limiter.Wait(ctx); err != nil {
+			return err
+		}
+
 		tok := c.getToken()
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -291,6 +302,34 @@ func (c *Client) doGet(ctx context.Context, path string, dest any) error {
 			}
 			attempt--
 			continue
+		}
+
+		// The Silo metadata proxy answers overload with 503 or 429 plus a
+		// Retry-After. That is admission backpressure, not an upstream failure,
+		// so wait as long as it asks, for as long as the caller's deadline
+		// allows, instead of giving up after maxRetries. Without a usable
+		// Retry-After the direct-mode handling below applies.
+		if proxyMode && (resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusTooManyRequests) {
+			if delay, ok := retryAfterDelay(resp.Header.Get("Retry-After"), time.Now()); ok {
+				_ = resp.Body.Close()
+				wait := delay + time.Duration(rand.Int64N(int64(proxyRetryJitter)))
+				if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= wait {
+					return fmt.Errorf("tvdb: metadata proxy HTTP %d and Retry-After %s would exceed caller deadline", resp.StatusCode, delay)
+				}
+				slog.Debug("tvdb: metadata proxy busy, waiting for Retry-After",
+					"path", path,
+					"status", resp.StatusCode,
+					"retry_after", delay.String(),
+					"wait", wait.String(),
+				)
+				select {
+				case <-time.After(wait):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				attempt-- // backpressure waits do not use up maxRetries
+				continue
+			}
 		}
 
 		// 429 Too Many Requests.
@@ -366,6 +405,24 @@ func retryAfterOrDefault(resp *http.Response, attempt int) time.Duration {
 		}
 	}
 	return time.Duration(1<<attempt) * time.Second
+}
+
+// retryAfterDelay parses a Retry-After value given either in seconds or as an
+// HTTP-date. It reports false when the value is absent, malformed, or does not
+// ask for a positive wait. Waits are capped at maxProxyRetryAfter.
+func retryAfterDelay(value string, now time.Time) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	var delay time.Duration
+	if secs, err := strconv.ParseInt(value, 10, 64); err == nil {
+		// Clamp before converting so a huge value cannot overflow Duration.
+		delay = time.Duration(min(secs, int64(maxProxyRetryAfter/time.Second))) * time.Second
+	} else if at, err := http.ParseTime(value); err == nil {
+		delay = at.Sub(now)
+	}
+	if delay <= 0 {
+		return 0, false
+	}
+	return min(delay, maxProxyRetryAfter), true
 }
 
 // ---------------------------------------------------------------------------
