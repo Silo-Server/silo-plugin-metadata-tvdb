@@ -894,7 +894,9 @@ func artworkTypeToImageType(artType int) (metadata.ImageType, bool) {
 		return metadata.ImagePoster, true
 	case 3:
 		return metadata.ImageBackdrop, true
-	case 22:
+	// ClearLogo is the title-only logo (23 series, 25 movie). ClearArt (22
+	// series, 24 movie) is a 16:9 character composite, so it is not a logo.
+	case 23, 25:
 		return metadata.ImageLogo, true
 	default:
 		return 0, false
