@@ -210,7 +210,8 @@ func TestGetImagesReturnsArtworkImageURLs(t *testing.T) {
 						artworkFixture(2, 3, "https://artworks.example/background-original.jpg", 3840, 2160, 8, false, map[string]any{
 							"thumbnail": "",
 						}),
-						artworkFixture(3, 22, "https://artworks.example/logo-original.png", 1000, 400, 7, nil, nil),
+						artworkFixture(3, 23, "https://artworks.example/logo-original.png", 800, 310, 7, nil, nil),
+						artworkFixture(4, 22, "https://artworks.example/clearart-original.png", 1000, 562, 9, nil, nil),
 					},
 				},
 			})
@@ -257,6 +258,54 @@ func TestGetImagesReturnsArtworkImageURLs(t *testing.T) {
 	}
 	if got[metadata.ImageLogo].IncludesText != nil {
 		t.Fatalf("logo IncludesText = %v, want nil for an omitted provider value", got[metadata.ImageLogo].IncludesText)
+	}
+}
+
+func TestGetImagesUsesMovieClearLogoNotClearArt(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/login":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "success",
+				"data":   map[string]any{"token": "test-token"},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/movies/77/extended":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "success",
+				"data": map[string]any{
+					"id":   77,
+					"name": "Movie",
+					"artworks": []map[string]any{
+						artworkFixture(1, 25, "https://artworks.example/movie-logo.png", 800, 310, 5, nil, nil),
+						artworkFixture(2, 24, "https://artworks.example/movie-clearart.png", 1000, 562, 9, nil, nil),
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(1000)
+	client.SetBaseURL(server.URL)
+
+	images, err := NewProviderWithClient(client).GetImages(context.Background(), metadata.ImageRequest{
+		ProviderIDs: map[string]string{"tvdb": "77"},
+		ContentType: "movie",
+	})
+	if err != nil {
+		t.Fatalf("GetImages() error = %v", err)
+	}
+	if len(images) != 1 {
+		t.Fatalf("len(images) = %d, want 1: %+v", len(images), images)
+	}
+	if images[0].Type != metadata.ImageLogo || images[0].URL != "https://artworks.example/movie-logo.png" {
+		t.Fatalf("image = %+v, want movie ClearLogo", images[0])
 	}
 }
 
