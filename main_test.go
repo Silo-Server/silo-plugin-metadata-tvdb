@@ -95,45 +95,23 @@ func TestRuntimeServerConfigure_NoOp(t *testing.T) {
 	}
 }
 
-func metadataProxyEntry(t *testing.T, values map[string]any) *pluginv1.ConfigEntry {
-	t.Helper()
-	value, err := structpb.NewStruct(values)
+func TestRuntimeServerConfigure_IgnoresStoredMetadataProxySetting(t *testing.T) {
+	// Servers that enabled the proxy in v1.4.0 keep the setting stored; it must
+	// no longer move them off direct TVDB access.
+	value, err := structpb.NewStruct(map[string]any{"enabled": true, "url": "https://metadata.siloserver.org"})
 	if err != nil {
 		t.Fatalf("structpb.NewStruct: %v", err)
 	}
-	return &pluginv1.ConfigEntry{Key: "metadata_proxy", Value: value}
-}
+	client := provider.NewClient(10)
+	server := &runtimeServer{provider: provider.NewProviderWithClient(client)}
 
-func TestMetadataProxyURLFromConfig(t *testing.T) {
-	tests := []struct {
-		name    string
-		entries []*pluginv1.ConfigEntry
-		want    string
-	}{
-		{"no config", nil, ""},
-		{"enabled with url", []*pluginv1.ConfigEntry{metadataProxyEntry(t, map[string]any{"enabled": true, "url": " https://proxy.example/ "})}, "https://proxy.example/"},
-		{"enabled without url", []*pluginv1.ConfigEntry{metadataProxyEntry(t, map[string]any{"enabled": true})}, defaultMetadataProxyURL},
-		{"enabled with blank url", []*pluginv1.ConfigEntry{metadataProxyEntry(t, map[string]any{"enabled": true, "url": "  "})}, defaultMetadataProxyURL},
-		{"disabled", []*pluginv1.ConfigEntry{metadataProxyEntry(t, map[string]any{"enabled": false, "url": "https://proxy.example"})}, ""},
-		{"other keys ignored", []*pluginv1.ConfigEntry{nil, {Key: "something_else"}}, ""},
+	if _, err := server.Configure(context.Background(), &pluginv1.ConfigureRequest{
+		Config: []*pluginv1.ConfigEntry{{Key: "metadata_proxy", Value: value}},
+	}); err != nil {
+		t.Fatalf("Configure() returned error: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := metadataProxyURLFromConfig(tt.entries); got != tt.want {
-				t.Fatalf("metadataProxyURLFromConfig() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRuntimeServerConfigure_RejectsInvalidProxyURL(t *testing.T) {
-	server := &runtimeServer{provider: provider.NewProvider()}
-
-	_, err := server.Configure(context.Background(), &pluginv1.ConfigureRequest{
-		Config: []*pluginv1.ConfigEntry{metadataProxyEntry(t, map[string]any{"enabled": true, "url": "metadata.siloserver.org"})},
-	})
-	if err == nil {
-		t.Fatal("Configure() accepted a proxy URL without a scheme")
+	if client.ProxyMode() {
+		t.Fatal("Configure() switched the client to the metadata proxy")
 	}
 }
 
