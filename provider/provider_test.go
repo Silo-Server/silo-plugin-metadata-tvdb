@@ -1061,6 +1061,9 @@ func TestGetSeriesMetadata_TranslatesNonNativeLanguage(t *testing.T) {
 	if result.Overview != "English series overview" {
 		t.Fatalf("Overview = %q, want %q", result.Overview, "English series overview")
 	}
+	if result.OverviewLanguage != "" {
+		t.Fatalf("OverviewLanguage = %q, want empty for a translated overview", result.OverviewLanguage)
+	}
 	if result.TitleLanguage != "en" || result.TitleIsFallback || result.OriginalLanguage != "ja" || result.OriginalTitle != "Original Japanese Title" {
 		t.Fatalf("title language metadata = title:%q fallback:%v original_language:%q original_title:%q", result.TitleLanguage, result.TitleIsFallback, result.OriginalLanguage, result.OriginalTitle)
 	}
@@ -1287,6 +1290,87 @@ func TestGetEpisodes_PartialTranslationFailureKeepsOriginalData(t *testing.T) {
 	}
 	if episodes[1].Overview != "JP ov 2" {
 		t.Errorf("episodes[1].Overview = %q, want %q (original kept after failure)", episodes[1].Overview, "JP ov 2")
+	}
+	// Only the untranslated episode reports its text as Japanese.
+	if episodes[0].TitleLanguage != "" || episodes[0].OverviewLanguage != "" {
+		t.Errorf("episodes[0] languages = %q/%q, want empty for translated text", episodes[0].TitleLanguage, episodes[0].OverviewLanguage)
+	}
+	if episodes[1].TitleLanguage != "ja" || episodes[1].OverviewLanguage != "ja" {
+		t.Errorf("episodes[1] languages = %q/%q, want ja/ja for original text", episodes[1].TitleLanguage, episodes[1].OverviewLanguage)
+	}
+}
+
+func TestGetSeriesMetadata_MarksOverviewLanguageWhenUntranslated(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		translations map[string]any
+		wantOverview string
+		wantLanguage string
+	}{
+		{
+			name:         "base record",
+			wantOverview: "Japanese overview",
+			wantLanguage: "ja",
+		},
+		{
+			name: "embedded translation in a third language",
+			translations: map[string]any{"overviewTranslations": []map[string]any{
+				{"language": "eng", "overview": "English overview", "isPrimary": true},
+			}},
+			wantOverview: "English overview",
+			wantLanguage: "en",
+		},
+		{
+			name: "requested language",
+			translations: map[string]any{"overviewTranslations": []map[string]any{
+				{"language": "eng", "overview": "English overview", "isPrimary": true},
+				{"language": "swe", "overview": "Svensk beskrivning"},
+			}},
+			wantOverview: "Svensk beskrivning",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/login":
+					_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": map[string]any{"token": "test-token"}})
+				case r.Method == http.MethodGet && r.URL.Path == "/series/100/extended":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"status": "success",
+						"data": map[string]any{
+							"id": 100, "name": "Original Japanese Title", "overview": "Japanese overview",
+							"originalLanguage": "jpn", "year": "2016", "translations": tt.translations,
+						},
+					})
+				case r.Method == http.MethodGet && r.URL.Path == "/series/100/translations/swe":
+					http.NotFound(w, r)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			client := NewClient(1000)
+			client.SetBaseURL(server.URL)
+			result, err := NewProviderWithClient(client).GetMetadata(context.Background(), metadata.MetadataRequest{
+				ProviderIDs: map[string]string{"tvdb": "100"},
+				ContentType: "series",
+				Language:    "sv",
+			})
+			if err != nil {
+				t.Fatalf("GetMetadata() error = %v", err)
+			}
+			if result.Overview != tt.wantOverview || result.OverviewLanguage != tt.wantLanguage {
+				t.Fatalf("overview = %q (%q), want %q (%q)", result.Overview, result.OverviewLanguage, tt.wantOverview, tt.wantLanguage)
+			}
+		})
 	}
 }
 
