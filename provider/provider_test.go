@@ -1300,6 +1300,29 @@ func TestGetEpisodes_PartialTranslationFailureKeepsOriginalData(t *testing.T) {
 	}
 }
 
+// A language TVDB has no code for is fetched in English, so the translated
+// text is marked English.
+func TestGetEpisodes_MarksFallbackTranslationLanguage(t *testing.T) {
+	t.Parallel()
+
+	server := newTranslationTestServer(t, nil)
+	defer server.Close()
+
+	client := NewClient(1000)
+	client.SetBaseURL(server.URL)
+	episodes, err := NewProviderWithClient(client).GetEpisodes(context.Background(), metadata.EpisodesRequest{
+		ProviderIDs:  map[string]string{"tvdb": "100"},
+		SeasonNumber: 1,
+		Language:     "is",
+	})
+	if err != nil {
+		t.Fatalf("GetEpisodes() error = %v", err)
+	}
+	if len(episodes) == 0 || episodes[0].Title != "English Ep 1" || episodes[0].TitleLanguage != "en" || episodes[0].OverviewLanguage != "en" {
+		t.Fatalf("episodes[0] = %q (%q/%q), want English text marked en", episodes[0].Title, episodes[0].TitleLanguage, episodes[0].OverviewLanguage)
+	}
+}
+
 func TestGetSeriesMetadata_MarksOverviewLanguageWhenUntranslated(t *testing.T) {
 	t.Parallel()
 

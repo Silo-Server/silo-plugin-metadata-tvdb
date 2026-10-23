@@ -320,7 +320,7 @@ func (p *Provider) getMovieMetadata(ctx context.Context, id int, lang string) (*
 				slog.Warn("tvdb: movie translation fetch failed", "movie_id", id, "lang", lang, "error", err)
 			} else if tr != nil {
 				if tr.Overview != "" && overview == "" {
-					overview, overviewLanguage = tr.Overview, lang
+					overview, overviewLanguage = tr.Overview, toLang3(lang)
 				}
 				if tr.Name != "" && title == movie.Name {
 					title = tr.Name
@@ -405,7 +405,7 @@ func (p *Provider) getSeriesMetadata(ctx context.Context, id int, lang string) (
 					title = tr.Name
 				}
 				if tr.Overview != "" && overview == series.Overview {
-					overview, overviewLanguage = tr.Overview, lang
+					overview, overviewLanguage = tr.Overview, toLang3(lang)
 				}
 			}
 		}
@@ -675,17 +675,19 @@ func (p *Provider) GetEpisodes(ctx context.Context, req metadata.EpisodesRequest
 		if ep.SeasonNumber != req.SeasonNumber {
 			continue
 		}
-		// The base records are in the series' original language.
+		// The base records are in the series' original language, and a
+		// translation is in the language fetched: toLang3 turns a language
+		// TVDB has no code for into English.
 		title, overview := ep.Name, ep.Overview
 		titleLanguage, overviewLanguage := base.series.OriginalLanguage, base.series.OriginalLanguage
 		// Overlay the translation only when present, so an episode without a
 		// translation keeps its original-language title/overview.
 		if tr, ok := translated[ep.ID]; ok {
 			if tr.Name != "" {
-				title, titleLanguage = tr.Name, req.Language
+				title, titleLanguage = tr.Name, toLang3(req.Language)
 			}
 			if tr.Overview != "" {
-				overview, overviewLanguage = tr.Overview, req.Language
+				overview, overviewLanguage = tr.Overview, toLang3(req.Language)
 			}
 		}
 		episodes = append(episodes, metadata.EpisodeResult{
