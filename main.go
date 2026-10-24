@@ -213,16 +213,18 @@ func (s *metadataServer) GetEpisodes(ctx context.Context, req *pluginv1.GetEpiso
 			return nil, err
 		}
 		response.Episodes = append(response.Episodes, &pluginv1.EpisodeRecord{
-			ProviderId:    result.ContentID,
-			SeasonNumber:  int32(result.SeasonNumber),
-			EpisodeNumber: int32(result.EpisodeNumber),
-			Title:         result.Title,
-			Overview:      result.Overview,
-			AirDate:       result.AirDate,
-			Runtime:       int32(result.Runtime),
-			StillPath:     tvdbCanonicalPath(result.StillPath),
-			ProviderIds:   providerIDs,
-			Ratings:       ratingsStruct(result.Ratings),
+			ProviderId:       result.ContentID,
+			SeasonNumber:     int32(result.SeasonNumber),
+			EpisodeNumber:    int32(result.EpisodeNumber),
+			Title:            result.Title,
+			TitleLanguage:    result.TitleLanguage,
+			Overview:         result.Overview,
+			OverviewLanguage: result.OverviewLanguage,
+			AirDate:          result.AirDate,
+			Runtime:          int32(result.Runtime),
+			StillPath:        tvdbCanonicalPath(result.StillPath),
+			ProviderIds:      providerIDs,
+			Ratings:          ratingsStruct(result.Ratings),
 		})
 	}
 	return response, nil
@@ -350,6 +352,7 @@ func metadataItemFromResult(result *metadata.MetadataResult, itemType string) (*
 		SortTitle:            result.SortTitle,
 		Year:                 int32(result.Year),
 		Overview:             result.Overview,
+		OverviewLanguage:     result.OverviewLanguage,
 		Tagline:              result.Tagline,
 		Runtime:              int32(result.Runtime),
 		Genres:               append([]string(nil), result.Genres...),

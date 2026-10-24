@@ -195,6 +195,17 @@ func titleIsFallback(requested, originalLanguage, title, original string) bool {
 		strings.EqualFold(strings.TrimSpace(title), strings.TrimSpace(original))
 }
 
+// textLanguage returns the ISO 639-1 language of text when it is not in the
+// requested language, and empty when it is, when the text is empty, or when no
+// language was requested or the text's language is unknown.
+func textLanguage(requested, language, text string) string {
+	if strings.TrimSpace(text) == "" || strings.TrimSpace(requested) == "" ||
+		strings.TrimSpace(language) == "" || languageMatches(requested, language) {
+		return ""
+	}
+	return toLang1(language)
+}
+
 func resolvedTitleLanguage(requested, originalLanguage, title, original string) string {
 	if titleIsFallback(requested, originalLanguage, title, original) {
 		return toLang1(originalLanguage)
@@ -296,7 +307,7 @@ func (p *Provider) getMovieMetadata(ctx context.Context, id int, lang string) (*
 	}
 
 	title := movie.Name
-	overview := findTranslationOverview(movie.Translations, lang)
+	overview, overviewLanguage := findTranslationOverview(movie.Translations, lang)
 	if needsTranslation(lang, movie.OriginalLanguage) {
 		// Try embedded translations first (movie endpoint includes ?meta=translations).
 		if name := findTranslationName(movie.Translations, lang); name != "" {
@@ -309,7 +320,7 @@ func (p *Provider) getMovieMetadata(ctx context.Context, id int, lang string) (*
 				slog.Warn("tvdb: movie translation fetch failed", "movie_id", id, "lang", lang, "error", err)
 			} else if tr != nil {
 				if tr.Overview != "" && overview == "" {
-					overview = tr.Overview
+					overview, overviewLanguage = tr.Overview, toLang3(lang)
 				}
 				if tr.Name != "" && title == movie.Name {
 					title = tr.Name
@@ -328,6 +339,7 @@ func (p *Provider) getMovieMetadata(ctx context.Context, id int, lang string) (*
 		TitleLanguage:        resolvedTitleLanguage(lang, movie.OriginalLanguage, title, movie.Name),
 		TitleIsFallback:      titleIsFallback(lang, movie.OriginalLanguage, title, movie.Name),
 		Overview:             overview,
+		OverviewLanguage:     textLanguage(lang, overviewLanguage, overview),
 		Runtime:              movie.Runtime,
 		Year:                 extractYear(movie.Year),
 		ContentRating:        findContentRating(movie.ContentRatings),
@@ -373,14 +385,15 @@ func (p *Provider) getSeriesMetadata(ctx context.Context, id int, lang string) (
 	}
 
 	title := series.Name
-	overview := series.Overview
+	// The base record's overview is in the series' original language.
+	overview, overviewLanguage := series.Overview, series.OriginalLanguage
 	if needsTranslation(lang, series.OriginalLanguage) {
 		// Try embedded translations first (series endpoint now includes ?meta=translations).
 		if name := findTranslationName(series.Translations, lang); name != "" {
 			title = name
 		}
-		if ov := findTranslationOverview(series.Translations, lang); ov != "" {
-			overview = ov
+		if ov, ovLanguage := findTranslationOverview(series.Translations, lang); ov != "" {
+			overview, overviewLanguage = ov, ovLanguage
 		}
 		// Fall back to dedicated translation endpoint for any missing fields.
 		if title == series.Name || overview == series.Overview {
@@ -392,7 +405,7 @@ func (p *Provider) getSeriesMetadata(ctx context.Context, id int, lang string) (
 					title = tr.Name
 				}
 				if tr.Overview != "" && overview == series.Overview {
-					overview = tr.Overview
+					overview, overviewLanguage = tr.Overview, toLang3(lang)
 				}
 			}
 		}
@@ -408,6 +421,7 @@ func (p *Provider) getSeriesMetadata(ctx context.Context, id int, lang string) (
 		TitleLanguage:        resolvedTitleLanguage(lang, series.OriginalLanguage, title, series.Name),
 		TitleIsFallback:      titleIsFallback(lang, series.OriginalLanguage, title, series.Name),
 		Overview:             overview,
+		OverviewLanguage:     textLanguage(lang, overviewLanguage, overview),
 		Year:                 extractYear(series.Year),
 		ContentRating:        findContentRating(series.ContentRatings),
 		SeasonCount:          officialCount,
@@ -661,26 +675,32 @@ func (p *Provider) GetEpisodes(ctx context.Context, req metadata.EpisodesRequest
 		if ep.SeasonNumber != req.SeasonNumber {
 			continue
 		}
+		// The base records are in the series' original language, and a
+		// translation is in the language fetched: toLang3 turns a language
+		// TVDB has no code for into English.
 		title, overview := ep.Name, ep.Overview
+		titleLanguage, overviewLanguage := base.series.OriginalLanguage, base.series.OriginalLanguage
 		// Overlay the translation only when present, so an episode without a
 		// translation keeps its original-language title/overview.
 		if tr, ok := translated[ep.ID]; ok {
 			if tr.Name != "" {
-				title = tr.Name
+				title, titleLanguage = tr.Name, toLang3(req.Language)
 			}
 			if tr.Overview != "" {
-				overview = tr.Overview
+				overview, overviewLanguage = tr.Overview, toLang3(req.Language)
 			}
 		}
 		episodes = append(episodes, metadata.EpisodeResult{
-			ProviderIDs:   map[string]string{"tvdb": strconv.Itoa(ep.ID)},
-			SeasonNumber:  ep.SeasonNumber,
-			EpisodeNumber: ep.Number,
-			Title:         title,
-			Overview:      overview,
-			Runtime:       ep.Runtime,
-			AirDate:       ep.Aired,
-			StillPath:     ep.Image,
+			ProviderIDs:      map[string]string{"tvdb": strconv.Itoa(ep.ID)},
+			SeasonNumber:     ep.SeasonNumber,
+			EpisodeNumber:    ep.Number,
+			Title:            title,
+			TitleLanguage:    textLanguage(req.Language, titleLanguage, title),
+			Overview:         overview,
+			OverviewLanguage: textLanguage(req.Language, overviewLanguage, overview),
+			Runtime:          ep.Runtime,
+			AirDate:          ep.Aired,
+			StillPath:        ep.Image,
 		})
 	}
 
@@ -717,27 +737,28 @@ func findTranslationName(td *TranslationData, lang string) string {
 }
 
 // findTranslationOverview selects an overview translation matching the
-// requested language. Fallback order: requested → primary → first non-empty.
-func findTranslationOverview(td *TranslationData, lang string) string {
+// requested language and returns it with its TVDB language. Fallback order:
+// requested → primary → first non-empty.
+func findTranslationOverview(td *TranslationData, lang string) (string, string) {
 	if td == nil {
-		return ""
+		return "", ""
 	}
 	for _, t := range td.OverviewTranslations {
 		if t.Overview != "" && languageMatches(lang, t.Language) {
-			return t.Overview
+			return t.Overview, t.Language
 		}
 	}
 	for _, t := range td.OverviewTranslations {
 		if t.IsPrimary && t.Overview != "" {
-			return t.Overview
+			return t.Overview, t.Language
 		}
 	}
 	for _, t := range td.OverviewTranslations {
 		if t.Overview != "" {
-			return t.Overview
+			return t.Overview, t.Language
 		}
 	}
-	return ""
+	return "", ""
 }
 
 func findContentRating(ratings []ContentRating) string {

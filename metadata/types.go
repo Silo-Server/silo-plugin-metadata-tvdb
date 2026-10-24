@@ -53,6 +53,7 @@ type MetadataResult struct {
 	OriginalTitle        string
 	SortTitle            string
 	Overview             string
+	OverviewLanguage     string // set only when Overview is not in the requested language
 	Tagline              string
 	Year                 int
 	Runtime              int
@@ -179,6 +180,9 @@ type EpisodeResult struct {
 	Runtime       int
 	Ratings       Ratings
 	StillPath     string
+	// Set only when Title or Overview is not in the requested language.
+	TitleLanguage    string
+	OverviewLanguage string
 }
 
 // NormalizeOriginalLanguage lowercases and trims whitespace from a language code.
