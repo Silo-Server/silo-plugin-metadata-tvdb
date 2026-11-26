@@ -2,17 +2,15 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
-	"fmt"
-	"os"
+	"errors"
 	"strings"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
-	publicmanifest "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/manifest"
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/runtime"
 	"github.com/Silo-Server/silo-plugin-tvdb/metadata"
 	"github.com/Silo-Server/silo-plugin-tvdb/models"
@@ -51,36 +49,31 @@ func tvdbThumbnailURL(imageURL string) string {
 	return imageURL[:dotIdx] + "_t" + imageURL[dotIdx:]
 }
 
-type runtimeServer struct {
-	pluginv1.UnimplementedRuntimeServer
-
-	manifest *pluginv1.PluginManifest
-	provider *provider.Provider
-}
-
 type metadataServer struct {
 	pluginv1.UnimplementedMetadataProviderServer
+	pluginv1.UnimplementedEpisodeOrdersServer
 	pluginv1.UnimplementedImageResolverServer
-	runtime *runtimeServer
+	provider *provider.Provider
 }
 
 //go:embed manifest.json
 var manifestJSON []byte
 
-func (s *runtimeServer) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
-	return &pluginv1.GetManifestResponse{Manifest: s.manifest}, nil
-}
-
-func (s *runtimeServer) Configure(_ context.Context, _ *pluginv1.ConfigureRequest) (*pluginv1.ConfigureResponse, error) {
-	return &pluginv1.ConfigureResponse{}, nil
-}
-
-func (s *runtimeServer) providerForRequest() (*provider.Provider, error) {
+func (s *metadataServer) providerForRequest() (*provider.Provider, error) {
 	return s.provider, nil
 }
 
+// episodeOrderError answers an ordering the series does not have with
+// NOT_FOUND, so the host can fall back to the default order.
+func episodeOrderError(err error) error {
+	if errors.Is(err, provider.ErrUnknownEpisodeOrder) {
+		return status.Error(codes.NotFound, err.Error())
+	}
+	return err
+}
+
 func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadataRequest) (*pluginv1.SearchMetadataResponse, error) {
-	p, err := s.runtime.providerForRequest()
+	p, err := s.providerForRequest()
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +116,7 @@ func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadat
 }
 
 func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetadataRequest) (*pluginv1.GetMetadataResponse, error) {
-	p, err := s.runtime.providerForRequest()
+	p, err := s.providerForRequest()
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +134,7 @@ func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetad
 }
 
 func (s *metadataServer) GetPersonDetail(ctx context.Context, req *pluginv1.GetPersonDetailRequest) (*pluginv1.GetPersonDetailResponse, error) {
-	p, err := s.runtime.providerForRequest()
+	p, err := s.providerForRequest()
 	if err != nil {
 		return nil, err
 	}
@@ -162,14 +155,14 @@ func (s *metadataServer) GetPersonDetail(ctx context.Context, req *pluginv1.GetP
 }
 
 func (s *metadataServer) GetSeasons(ctx context.Context, req *pluginv1.GetSeasonsRequest) (*pluginv1.GetSeasonsResponse, error) {
-	p, err := s.runtime.providerForRequest()
+	p, err := s.providerForRequest()
 	if err != nil {
 		return nil, err
 	}
 
 	results, err := p.GetSeasons(ctx, seasonsRequestFromProto(req, "tvdb"))
 	if err != nil {
-		return nil, err
+		return nil, episodeOrderError(err)
 	}
 
 	response := &pluginv1.GetSeasonsResponse{
@@ -194,14 +187,14 @@ func (s *metadataServer) GetSeasons(ctx context.Context, req *pluginv1.GetSeason
 }
 
 func (s *metadataServer) GetEpisodes(ctx context.Context, req *pluginv1.GetEpisodesRequest) (*pluginv1.GetEpisodesResponse, error) {
-	p, err := s.runtime.providerForRequest()
+	p, err := s.providerForRequest()
 	if err != nil {
 		return nil, err
 	}
 
 	results, err := p.GetEpisodes(ctx, episodesRequestFromProto(req, "tvdb"))
 	if err != nil {
-		return nil, err
+		return nil, episodeOrderError(err)
 	}
 
 	response := &pluginv1.GetEpisodesResponse{
@@ -213,25 +206,67 @@ func (s *metadataServer) GetEpisodes(ctx context.Context, req *pluginv1.GetEpiso
 			return nil, err
 		}
 		response.Episodes = append(response.Episodes, &pluginv1.EpisodeRecord{
-			ProviderId:       result.ContentID,
-			SeasonNumber:     int32(result.SeasonNumber),
-			EpisodeNumber:    int32(result.EpisodeNumber),
-			Title:            result.Title,
-			TitleLanguage:    result.TitleLanguage,
-			Overview:         result.Overview,
-			OverviewLanguage: result.OverviewLanguage,
-			AirDate:          result.AirDate,
-			Runtime:          int32(result.Runtime),
-			StillPath:        tvdbCanonicalPath(result.StillPath),
-			ProviderIds:      providerIDs,
-			Ratings:          ratingsStruct(result.Ratings),
+			ProviderId:           result.ContentID,
+			SeasonNumber:         int32(result.SeasonNumber),
+			EpisodeNumber:        int32(result.EpisodeNumber),
+			Title:                result.Title,
+			TitleLanguage:        result.TitleLanguage,
+			Overview:             result.Overview,
+			OverviewLanguage:     result.OverviewLanguage,
+			AirDate:              result.AirDate,
+			Runtime:              int32(result.Runtime),
+			StillPath:            tvdbCanonicalPath(result.StillPath),
+			ProviderIds:          providerIDs,
+			Ratings:              ratingsStruct(result.Ratings),
+			AbsoluteNumber:       optionalInt32(result.AbsoluteNumber),
+			DefaultSeasonNumber:  optionalInt32(result.DefaultSeasonNumber),
+			DefaultEpisodeNumber: optionalInt32(result.DefaultEpisodeNumber),
 		})
 	}
 	return response, nil
 }
 
+func (s *metadataServer) ListEpisodeOrders(ctx context.Context, req *pluginv1.ListEpisodeOrdersRequest) (*pluginv1.ListEpisodeOrdersResponse, error) {
+	p, err := s.providerForRequest()
+	if err != nil {
+		return nil, err
+	}
+
+	orders, err := p.ListEpisodeOrders(ctx, metadata.EpisodeOrdersRequest{
+		ProviderIDs: providerIDsFromProto(req.GetProviderIds(), "tvdb", req.GetSeriesProviderId()),
+		Language:    req.GetLanguage(),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	response := &pluginv1.ListEpisodeOrdersResponse{
+		Orders: make([]*pluginv1.EpisodeOrder, 0, len(orders)),
+	}
+	for _, order := range orders {
+		response.Orders = append(response.Orders, &pluginv1.EpisodeOrder{
+			Id:           order.ID,
+			Name:         order.Name,
+			Kind:         order.Kind,
+			Description:  order.Description,
+			SeasonCount:  int32(order.SeasonCount),
+			EpisodeCount: int32(order.EpisodeCount),
+			IsDefault:    order.IsDefault,
+		})
+	}
+	return response, nil
+}
+
+func optionalInt32(value *int) *int32 {
+	if value == nil {
+		return nil
+	}
+	converted := int32(*value)
+	return &converted
+}
+
 func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesRequest) (*pluginv1.GetImagesResponse, error) {
-	p, err := s.runtime.providerForRequest()
+	p, err := s.providerForRequest()
 	if err != nil {
 		return nil, err
 	}
@@ -294,48 +329,11 @@ func (s *metadataServer) ResolveImageURLs(_ context.Context, req *pluginv1.Resol
 }
 
 func main() {
-	manifest, err := loadManifest()
-	if err != nil {
-		panic(err)
-	}
-
-	rs := &runtimeServer{
-		manifest: manifest,
-		provider: provider.NewProvider(),
-	}
-
-	ms := &metadataServer{runtime: rs}
-	runtime.Serve(runtime.ServeConfig{
-		Servers: runtime.CapabilityServers{
-			Runtime:          rs,
-			MetadataProvider: ms,
-			ImageResolver:    ms,
-		},
-	})
-}
-
-func loadManifest() (*pluginv1.PluginManifest, error) {
-	manifest, err := publicmanifest.Load(manifestJSON)
-	if err != nil {
-		return nil, fmt.Errorf("load embedded manifest: %w", err)
-	}
-
-	if version != "" {
-		manifest.Version = version
-	}
-
-	executablePath, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("resolve executable path: %w", err)
-	}
-	binaryData, err := os.ReadFile(executablePath)
-	if err != nil {
-		return nil, fmt.Errorf("read executable %q: %w", executablePath, err)
-	}
-	checksum := sha256.Sum256(binaryData)
-	manifest.Checksum = hex.EncodeToString(checksum[:])
-
-	return manifest, nil
+	ms := &metadataServer{provider: provider.NewProvider()}
+	runtime.ServeManifestWithOptions(manifestJSON, version, runtime.CapabilityServers{
+		MetadataProvider: ms,
+		ImageResolver:    ms,
+	}, runtime.WithEpisodeOrders(ms))
 }
 
 func metadataItemFromResult(result *metadata.MetadataResult, itemType string) (*pluginv1.MetadataItem, error) {
@@ -478,6 +476,7 @@ func seasonsRequestFromProto(req *pluginv1.GetSeasonsRequest, capabilityID strin
 		ProviderIDs: providerIDsFromProto(req.GetProviderIds(), capabilityID, req.GetSeriesProviderId()),
 		ContentType: "series",
 		Language:    req.GetLanguage(),
+		Ordering:    req.GetOrdering(),
 	}
 }
 
@@ -486,6 +485,7 @@ func episodesRequestFromProto(req *pluginv1.GetEpisodesRequest, capabilityID str
 		ProviderIDs:  providerIDsFromProto(req.GetProviderIds(), capabilityID, req.GetSeriesProviderId()),
 		SeasonNumber: int(req.GetSeasonNumber()),
 		Language:     req.GetLanguage(),
+		Ordering:     req.GetOrdering(),
 	}
 }
 
