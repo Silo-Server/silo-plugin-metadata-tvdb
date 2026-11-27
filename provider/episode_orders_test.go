@@ -285,3 +285,26 @@ func TestGetSeasons_ServesTheOrderingsSeasons(t *testing.T) {
 		}
 	}
 }
+
+// A series can name a season type its own way (TVDB's alternateName, such
+// as "Netflix Order"); that name is the one an admin recognizes.
+func TestSeasonTypeNamePrefersTheSeriesName(t *testing.T) {
+	t.Parallel()
+	netflix := "Netflix Order"
+	known := []SeasonType{{ID: 4, Type: "alternate", Name: "Alternate Order", AlternateName: &netflix}}
+	cases := []struct {
+		name       string
+		seasonType SeasonType
+		want       string
+	}{
+		{"series name from seasonTypes", SeasonType{ID: 4}, "Netflix Order"},
+		{"series name on the season", SeasonType{ID: 5, Name: "Alternate DVD Order", AlternateName: &netflix}, "Netflix Order"},
+		{"generic name", SeasonType{ID: 2, Name: "DVD Order"}, "DVD Order"},
+		{"slug", SeasonType{ID: 9}, "regional"},
+	}
+	for _, tc := range cases {
+		if got := seasonTypeName(tc.seasonType, known, "regional"); got != tc.want {
+			t.Errorf("%s: seasonTypeName = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

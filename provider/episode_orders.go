@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/Silo-Server/silo-plugin-tvdb/metadata"
 )
@@ -123,12 +124,24 @@ func seasonTypeSlug(seasonType SeasonType, known []SeasonType) string {
 	return ""
 }
 
+// seasonTypeName names a season type: the series' own name for it
+// (alternateName, such as "Netflix Order") when it has one, else TVDB's
+// generic name, else the slug. Either can be on the season record or only in
+// the series' seasonTypes.
 func seasonTypeName(seasonType SeasonType, known []SeasonType, slug string) string {
-	if seasonType.Name != "" {
-		return seasonType.Name
-	}
+	candidates := []SeasonType{seasonType}
 	for _, candidate := range known {
-		if candidate.ID == seasonType.ID && candidate.Name != "" {
+		if candidate.ID == seasonType.ID {
+			candidates = append(candidates, candidate)
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate.AlternateName != nil && strings.TrimSpace(*candidate.AlternateName) != "" {
+			return strings.TrimSpace(*candidate.AlternateName)
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate.Name != "" {
 			return candidate.Name
 		}
 	}
