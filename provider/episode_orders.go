@@ -89,10 +89,23 @@ func (p *Provider) episodeOrderSeasonType(ctx context.Context, seriesID int, ord
 	if err != nil {
 		return "", err
 	}
-	if len(seasonsOfType(series, ordering)) == 0 {
-		return "", fmt.Errorf("%w %q for series %d", ErrUnknownEpisodeOrder, ordering, seriesID)
+	seasonType, _, err := orderingSeasons(series, seriesID, ordering)
+	return seasonType, err
+}
+
+// orderingSeasons returns the season type that serves ordering and the
+// series' seasons in it. The empty ordering is the aired order; any other
+// ordering than the aired order must have seasons.
+func orderingSeasons(series *SeriesExtendedRecord, seriesID int, ordering string) (string, []SeasonBaseRecord, error) {
+	seasonType := officialSeasonType
+	if ordering != "" {
+		seasonType = ordering
 	}
-	return ordering, nil
+	seasons := seasonsOfType(series, seasonType)
+	if len(seasons) == 0 && seasonType != officialSeasonType {
+		return "", nil, fmt.Errorf("%w %q for series %d", ErrUnknownEpisodeOrder, ordering, seriesID)
+	}
+	return seasonType, seasons, nil
 }
 
 // seasonsOfType returns the series' seasons in the given season type.

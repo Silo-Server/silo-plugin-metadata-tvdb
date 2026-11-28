@@ -584,13 +584,9 @@ func (p *Provider) GetSeasons(ctx context.Context, req metadata.SeasonsRequest) 
 		return nil, err
 	}
 
-	seasonType := officialSeasonType
-	if req.Ordering != "" {
-		seasonType = req.Ordering
-	}
-	orderSeasons := seasonsOfType(series, seasonType)
-	if len(orderSeasons) == 0 && seasonType != officialSeasonType {
-		return nil, fmt.Errorf("%w %q for series %d", ErrUnknownEpisodeOrder, req.Ordering, id)
+	_, orderSeasons, err := orderingSeasons(series, id, req.Ordering)
+	if err != nil {
+		return nil, err
 	}
 
 	artworkBySeason := make(map[int][]ArtworkRecord)
