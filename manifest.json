@@ -49,7 +49,8 @@
           "series": 2,
           "season": 2,
           "episode": 2
-        }
+        },
+        "episode_orders": true
       }
     },
     {

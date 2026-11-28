@@ -584,12 +584,9 @@ func (p *Provider) GetSeasons(ctx context.Context, req metadata.SeasonsRequest) 
 		return nil, err
 	}
 
-	// Filter to official seasons.
-	var officialSeasons []SeasonBaseRecord
-	for _, s := range series.Seasons {
-		if isOfficialSeason(s) {
-			officialSeasons = append(officialSeasons, s)
-		}
+	_, orderSeasons, err := orderingSeasons(series, id, req.Ordering)
+	if err != nil {
+		return nil, err
 	}
 
 	artworkBySeason := make(map[int][]ArtworkRecord)
@@ -599,8 +596,8 @@ func (p *Provider) GetSeasons(ctx context.Context, req metadata.SeasonsRequest) 
 		}
 	}
 
-	seasons := make([]metadata.SeasonResult, len(officialSeasons))
-	for i, s := range officialSeasons {
+	seasons := make([]metadata.SeasonResult, len(orderSeasons))
+	for i, s := range orderSeasons {
 		seasons[i] = metadata.SeasonResult{
 			SeasonNumber: s.Number,
 			PosterPath:   seasonPosterPath(artworkBySeason[s.ID], s.Image, req.Language),
@@ -612,7 +609,7 @@ func (p *Provider) GetSeasons(ctx context.Context, req metadata.SeasonsRequest) 
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(5)
 
-		for i, s := range officialSeasons {
+		for i, s := range orderSeasons {
 			g.Go(func() error {
 				tr, err := p.client.GetSeasonTranslation(gctx, s.ID, lang3)
 				if err != nil {
@@ -648,12 +645,31 @@ func (p *Provider) GetEpisodes(ctx context.Context, req metadata.EpisodesRequest
 		return nil, fmt.Errorf("tvdb: invalid TVDB ID: %w", err)
 	}
 
+	seasonType, err := p.episodeOrderSeasonType(ctx, id, req.Ordering)
+	if err != nil {
+		return nil, err
+	}
+
 	// Fetch the whole series' episodes in one bulk (paginated, cached) call
 	// instead of one translation round-trip per episode. officialSeasonType
 	// mirrors the previous "official / Aired Order" (Type.ID == 1) filter.
-	base, err := p.client.getAllSeriesEpisodes(ctx, id, officialSeasonType, "")
+	base, err := p.client.getAllSeriesEpisodes(ctx, id, seasonType, "")
 	if err != nil {
 		return nil, err
+	}
+
+	// Another ordering keeps each episode's aired-order coordinates. TVDB
+	// episode IDs are the same in every season type.
+	var aired map[int]EpisodeBaseRecord
+	if seasonType != officialSeasonType {
+		official, err := p.client.getAllSeriesEpisodes(ctx, id, officialSeasonType, "")
+		if err != nil {
+			return nil, err
+		}
+		aired = make(map[int]EpisodeBaseRecord, len(official.episodes))
+		for _, ep := range official.episodes {
+			aired[ep.ID] = ep
+		}
 	}
 
 	// When a non-native language is requested, pull the translated bulk list
@@ -661,7 +677,7 @@ func (p *Provider) GetEpisodes(ctx context.Context, req metadata.EpisodesRequest
 	translated := map[int]EpisodeBaseRecord{}
 	if needsTranslation(req.Language, base.series.OriginalLanguage) {
 		lang3 := toLang3(req.Language)
-		tr, err := p.client.getAllSeriesEpisodes(ctx, id, officialSeasonType, lang3)
+		tr, err := p.client.getAllSeriesEpisodes(ctx, id, seasonType, lang3)
 		if err != nil {
 			return nil, err
 		}
@@ -690,8 +706,10 @@ func (p *Provider) GetEpisodes(ctx context.Context, req metadata.EpisodesRequest
 				overview, overviewLanguage = tr.Overview, toLang3(req.Language)
 			}
 		}
-		episodes = append(episodes, metadata.EpisodeResult{
-			ProviderIDs:      map[string]string{"tvdb": strconv.Itoa(ep.ID)},
+		episodeID := strconv.Itoa(ep.ID)
+		result := metadata.EpisodeResult{
+			ContentID:        episodeID,
+			ProviderIDs:      map[string]string{"tvdb": episodeID},
 			SeasonNumber:     ep.SeasonNumber,
 			EpisodeNumber:    ep.Number,
 			Title:            title,
@@ -701,7 +719,16 @@ func (p *Provider) GetEpisodes(ctx context.Context, req metadata.EpisodesRequest
 			Runtime:          ep.Runtime,
 			AirDate:          ep.Aired,
 			StillPath:        ep.Image,
-		})
+		}
+		// TVDB reports 0 when the episode has no absolute number.
+		if ep.AbsoluteNumber > 0 {
+			result.AbsoluteNumber = &ep.AbsoluteNumber
+		}
+		if airedEp, ok := aired[ep.ID]; ok {
+			result.DefaultSeasonNumber = &airedEp.SeasonNumber
+			result.DefaultEpisodeNumber = &airedEp.Number
+		}
+		episodes = append(episodes, result)
 	}
 
 	return episodes, nil

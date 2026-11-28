@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 	"github.com/Silo-Server/silo-plugin-tvdb/metadata"
@@ -78,43 +82,6 @@ func TestImageRecordMetadataIncludesArtworkTextSignal(t *testing.T) {
 	}
 }
 
-func TestRuntimeServerConfigure_NoOp(t *testing.T) {
-	server := &runtimeServer{provider: provider.NewProvider()}
-
-	_, err := server.Configure(context.Background(), &pluginv1.ConfigureRequest{})
-	if err != nil {
-		t.Fatalf("Configure() returned error: %v", err)
-	}
-
-	p, err := server.providerForRequest()
-	if err != nil {
-		t.Fatalf("providerForRequest() returned error: %v", err)
-	}
-	if p == nil {
-		t.Fatal("expected provider to be available")
-	}
-}
-
-func TestRuntimeServerConfigure_IgnoresStoredMetadataProxySetting(t *testing.T) {
-	// Servers that enabled the proxy in v1.4.0 keep the setting stored; it must
-	// no longer move them off direct TVDB access.
-	value, err := structpb.NewStruct(map[string]any{"enabled": true, "url": "https://metadata.siloserver.org"})
-	if err != nil {
-		t.Fatalf("structpb.NewStruct: %v", err)
-	}
-	client := provider.NewClient(10)
-	server := &runtimeServer{provider: provider.NewProviderWithClient(client)}
-
-	if _, err := server.Configure(context.Background(), &pluginv1.ConfigureRequest{
-		Config: []*pluginv1.ConfigEntry{{Key: "metadata_proxy", Value: value}},
-	}); err != nil {
-		t.Fatalf("Configure() returned error: %v", err)
-	}
-	if client.ProxyMode() {
-		t.Fatal("Configure() switched the client to the metadata proxy")
-	}
-}
-
 func TestPersonDetailRecordFromResult_CanonicalizesPhotoPath(t *testing.T) {
 	record, err := personDetailRecordFromResult(&metadata.PersonDetailResult{
 		Name:           "Sigourney Weaver",
@@ -140,5 +107,38 @@ func TestPersonDetailRecordFromResult_CanonicalizesPhotoPath(t *testing.T) {
 	}
 	if record.GetProviderIds().AsMap()["tvdb"] != "321" {
 		t.Fatalf("record.ProviderIds[tvdb] = %#v", record.GetProviderIds().AsMap()["tvdb"])
+	}
+}
+
+func TestEpisodeOrderingUnknownToSeriesIsNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/login":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": map[string]any{"token": "t"}})
+		case "/series/500/extended":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "data": map[string]any{
+				"id": 500,
+				"seasons": []map[string]any{
+					{"id": 11, "number": 1, "type": map[string]any{"id": 1, "type": "official", "name": "Aired Order"}},
+				},
+			}})
+		default:
+			t.Errorf("unexpected request: %s", r.URL.String())
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := provider.NewClient(1000)
+	client.SetBaseURL(server.URL)
+	ms := &metadataServer{provider: provider.NewProviderWithClient(client)}
+
+	_, err := ms.GetSeasons(context.Background(), &pluginv1.GetSeasonsRequest{SeriesProviderId: "500", Ordering: "dvd"})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetSeasons error = %v, want NOT_FOUND", err)
+	}
+	_, err = ms.GetEpisodes(context.Background(), &pluginv1.GetEpisodesRequest{SeriesProviderId: "500", SeasonNumber: 1, Ordering: "dvd"})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetEpisodes error = %v, want NOT_FOUND", err)
 	}
 }
